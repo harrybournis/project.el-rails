@@ -3,7 +3,7 @@
 ;; Copyright (C) 2026
 
 ;; Author: Harry Bournis <harrybournis@gmail.com>
-;; URL: https://github.com/harrybournis/project-rails
+;; URL: https://github.com/harrybournis/project.el-rails
 ;; Version: 1.0.0
 ;; Keywords: languages, project.el, rails
 ;; Package-Requires: ((emacs "28.1") (inflections "2.6"))
