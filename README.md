@@ -1,3 +1,5 @@
+[![MELPA](https://melpa.org/packages/project-rails-badge.svg)](https://melpa.org/#/project-rails)
+
 # project.el-rails
 
 ## Overview
