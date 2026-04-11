@@ -1,2 +1,4 @@
 context
 project-rails.elc
+/.agent-shell/
+/.serena/

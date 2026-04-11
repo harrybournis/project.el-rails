@@ -672,23 +672,127 @@ Example: app/models/project.rb -> spec/models/project_spec.rb"
 Maps app/foo/bar.rb directly to spec/foo/bar_spec.rb.
 Falls back to `project-rails-find-spec' if no direct mapping exists."
   (interactive)
-  (let* ((file (buffer-file-name))
-         (spec-path (project-rails--spec-path-from-file file)))
-    (if spec-path
+  (let* ((file-name (buffer-file-name))
+         (spec-path (project-rails--spec-path-from-file file-name)))
+    ;; If we found a spec path and it exists, open it
+    (if (and spec-path (file-exists-p (project-rails-expand-root spec-path)))
         (find-file (project-rails-expand-root spec-path))
-      (project-rails-find-spec))))
+      ;; Otherwise fall back to generic resource matching
+      (project-rails-find-current-resource "spec/"
+          "\\(?:^\\|.*/\\)%1$s_spec\\.rb$"
+        #'project-rails-find-spec))))
 
 ;;;###autoload
+(defun project-rails--test-path-from-file (file-name)
+  "Convert a Rails file path to its corresponding test path.
+For example: app/models/project.rb -> test/models/project_test.rb"
+  (when file-name
+    ;; Handle both absolute and relative paths
+    (let ((relative-name (file-relative-name file-name (project-rails-root))))
+      ;; Simple string-based approach
+      (when (and (string-match "app/" relative-name)
+                 (string-suffix-p ".rb" relative-name))
+        (let* ((without-app (substring relative-name (match-end 0)))  ;; Remove "app/"
+               (last-slash (cl-search "/" without-app :from-end t))
+               (dir-part (substring without-app 0 last-slash))
+               (file-part (substring without-app (1+ last-slash)))
+               (file-without-rb (substring file-part 0 -3))  ;; Remove ".rb"
+               (test-file (concat file-without-rb "_test.rb")))
+          (concat "test/" dir-part "/" test-file))))))
+
+(defun project-rails--spec-path-from-file (file-name)
+  "Convert a Rails file path to its corresponding spec path.
+For example: app/models/project.rb -> spec/models/project_spec.rb"
+  (when file-name
+    ;; Handle both absolute and relative paths
+    (let ((relative-name (file-relative-name file-name (project-rails-root))))
+      ;; Simple string-based approach
+      (when (and (string-match "app/" relative-name)
+                 (string-suffix-p ".rb" relative-name))
+        (let* ((without-app (substring relative-name (match-end 0)))  ;; Remove "app/"
+               (last-slash (cl-search "/" without-app :from-end t))
+               (dir-part (substring without-app 0 last-slash))
+               (file-part (substring without-app (1+ last-slash)))
+               (file-without-rb (substring file-part 0 -3))  ;; Remove ".rb"
+               (spec-file (concat file-without-rb "_spec.rb")))
+          (concat "spec/" dir-part "/" spec-file))))))
+;; (defun project-rails--test-path-from-file (file-name)
+;;   "Convert a Rails file path to its corresponding test path.
+;; For example: app/models/project.rb -> test/models/project_test.rb"
+;;   (if t "test/models/project_test.rb"))
+
 (defun project-rails-find-current-test ()
   "Find the test file for the current buffer's file.
 Maps app/foo/bar.rb directly to test/foo/bar_test.rb.
 Falls back to `project-rails-find-test' if no direct mapping exists."
   (interactive)
-  (let* ((file (buffer-file-name))
-         (test-path (project-rails--test-path-from-file file)))
-    (if test-path
+  (let* ((file-name (buffer-file-name))
+         (test-path (project-rails--test-path-from-file file-name)))
+    
+    ;; If we found a test path and it exists, open it
+    (if (and test-path (file-exists-p (project-rails-expand-root test-path)))
         (find-file (project-rails-expand-root test-path))
-      (project-rails-find-test))))
+      ;; Otherwise fall back to the original behavior
+      (project-rails-find-current-resource "test/"
+          "\\(?:^\\|.*/\\)%1$s_test\\.rb$"
+        #'project-rails-find-test))))
+
+;;;
+;;; Current app/test-spec toggle
+;;;
+
+(defun project-rails--preferred-test-framework ()
+  "Return preferred test framework symbol for the current project.
+Possible return values are `rspec' and `minitest'. Return nil if
+neither framework can be detected."
+  (let* ((root (project-rails-root))
+         (has-spec (and root (file-directory-p (expand-file-name "spec" root))))
+         (has-test (and root (file-directory-p (expand-file-name "test" root)))))
+    (cond
+     ((and has-spec (not has-test)) 'rspec)
+     ((and has-test (not has-spec)) 'minitest)
+     ;; If both are present, prefer rspec.
+     ((and has-spec has-test) 'rspec)
+     (t nil))))
+
+(defun project-rails--app-path-from-test-or-spec (relative-name)
+  "Convert RELATIVE-NAME in spec/test to matching app file path."
+  (cond
+   ((string-match "\\`spec/\\(.+\\)_spec\\.rb\\'" relative-name)
+    (concat "app/" (match-string 1 relative-name) ".rb"))
+   ((string-match "\\`test/\\(.+\\)_test\\.rb\\'" relative-name)
+    (concat "app/" (match-string 1 relative-name) ".rb"))))
+
+;;;###autoload
+(defun project-rails-find-current-app-or-test ()
+  "Toggle between app file and corresponding test/spec file.
+
+When the current file is under `app/', this command detects whether
+the project uses RSpec or Minitest and delegates to
+`project-rails-find-current-spec' or `project-rails-find-current-test'.
+
+When the current file is under `spec/' or `test/', this command jumps
+to the corresponding file under `app/'."
+  (interactive)
+  (let* ((file-name (buffer-file-name))
+         (root (project-rails-root))
+         (relative-name (and file-name root (file-relative-name file-name root))))
+    (unless relative-name
+      (user-error "Current buffer is not visiting a file in a Rails project"))
+    (cond
+     ((string-match "\\`app/" relative-name)
+      (pcase (project-rails--preferred-test-framework)
+        ('rspec (project-rails-find-current-spec))
+        ('minitest (project-rails-find-current-test))
+        (_ (user-error "Could not detect test framework (spec/ or test/)"))))
+     ((or (string-match "\\`spec/" relative-name)
+          (string-match "\\`test/" relative-name))
+      (let ((app-path (project-rails--app-path-from-test-or-spec relative-name)))
+        (if (and app-path (file-exists-p (project-rails-expand-root app-path)))
+            (find-file (project-rails-expand-root app-path))
+          (user-error "No matching app file found for %s" relative-name))))
+     (t
+      (user-error "Current file is not under app/, spec/, or test/")))))
 
 ;;;###autoload
 (defun project-rails-find-current-fixture ()
@@ -1016,6 +1120,7 @@ If called interactively will ask user for the PARTIAL-NAME."
     (define-key map (kbd "P") 'project-rails-find-current-spec)
     (define-key map (kbd "t") 'project-rails-find-test)
     (define-key map (kbd "T") 'project-rails-find-current-test)
+    (define-key map (kbd "A") 'project-rails-find-current-app-or-test)
     (define-key map (kbd "n") 'project-rails-find-migration)
     (define-key map (kbd "N") 'project-rails-find-current-migration)
     (define-key map (kbd "u") 'project-rails-find-fixture)
@@ -1089,6 +1194,7 @@ If called interactively will ask user for the PARTIAL-NAME."
     ["Current view"       project-rails-find-current-view]
     ["Current spec"       project-rails-find-current-spec]
     ["Current test"       project-rails-find-current-test]
+    ["Current app <-> test/spec" project-rails-find-current-app-or-test]
     ["Current migration"  project-rails-find-current-migration]
     ["Current fixture"    project-rails-find-current-fixture]
     ["Current serializer" project-rails-find-current-serializer]
